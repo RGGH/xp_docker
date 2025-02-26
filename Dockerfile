@@ -4,12 +4,12 @@ FROM python:3.10
 WORKDIR /app
 
 # Copy the Python script and requirements.txt into the container
-COPY ./hello_world.py /app/
+COPY ./btc_price.py /app/
 COPY ./requirements.txt /app/
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Command to run the Python script
-CMD ["python", "hello_world.py"]
+CMD ["python", "btc_price.py"]
 

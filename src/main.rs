@@ -1,71 +1,55 @@
-use bollard::container::{CreateContainerOptions, StartContainerOptions, Config, AttachContainerOptions, StopContainerOptions};
-use bollard::models::HostConfig;
+use bollard::container::{Config, CreateContainerOptions, StartContainerOptions};
+use bollard::image::{CreateImageOptions};
 use bollard::Docker;
-use bollard::image::BuildImageOptions;
-use futures_util::stream::StreamExt;
-use anyhow::Result;
-use tar::Builder;
-use std::fs::File;
-use std::path::Path;
+use futures_util::StreamExt;  // Correct import
+use bollard::models::{HostConfig};  // Correct import for HostConfig
+use tokio;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let docker = Docker::connect_with_local_defaults()?;
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let docker = Docker::connect_with_socket_defaults()?;
 
-    println!("Building Docker image...");
+    // Define the image and container name
+    let image_name = "my-python-app"; // Your built image name
+    let container_name = "python-container-new";
 
-    // Create a tar file containing only the Dockerfile
-    let tar_file = File::create("context.tar")?;
-    let mut tar_builder = Builder::new(tar_file);
+    // Pull the image if necessary
+    pull_image(&docker, image_name).await?;
 
-    if Path::new("Dockerfile").exists() {
-        println!("Dockerfile found, adding to tar...");
-        tar_builder.append_path("Dockerfile")?;
-    } else {
-        println!("Error: Dockerfile not found!");
-        return Ok(());
-    }
-
-    tar_builder.finish()?;
-
-    // Build options
-    let build_opts = BuildImageOptions {
-        t: "my-python-app:latest", // Explicitly tag as latest
-        dockerfile: "Dockerfile",
-        rm: true,
-        forcerm: true,
-        ..Default::default()
-    };
-
-    // Read the tar file
-    let context = std::fs::read("context.tar")?;
-
-    // Build the image
-    let mut build_stream = docker.build_image(build_opts, None, Some(context.into()));
-
-    // Stream the build output
-    while let Some(build_result) = build_stream.next().await {
-        match build_result {
-            Ok(output) => println!("{:?}", output),
-            Err(e) => println!("Error: {:?}", e),
-        }
-    }
-
-    // Clean up the temporary tar file
-    std::fs::remove_file("context.tar")?;
-
-    println!("Docker build completed.");
-
-    // Run the built image
-    run_container(&docker, "my-python-app").await?;
+    // Run the container
+    run_container(&docker, image_name, container_name).await?;
 
     Ok(())
 }
 
-// Function to create and start the container
-async fn run_container(docker: &Docker, image_name: &str) -> Result<()> {
-    let container_name = "python-container";
+async fn pull_image(docker: &Docker, image_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Pulling image '{}'...", image_name);
 
+    // Create image options
+    let opts = CreateImageOptions {
+        from_image: image_name,
+        ..Default::default()
+    };
+
+    let mut stream = docker.create_image(Some(opts), None, None); // Wrap in Some()
+
+    // Handle image pull progress
+    while let Some(status) = stream.next().await {
+        match status {
+            Ok(info) => {
+                if let Some(status_str) = info.status {
+                    println!("{}", status_str); // Changed to status instead of stream
+                }
+            }
+            Err(e) => eprintln!("Error pulling image: {}", e),
+        }
+    }
+
+    println!("Image '{}' pulled successfully.", image_name);
+    Ok(())
+}
+
+async fn run_container(docker: &Docker, image_name: &str, container_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Check if the container already exists
     match docker.inspect_container(container_name, None).await {
         Ok(container_info) => {
@@ -81,17 +65,18 @@ async fn run_container(docker: &Docker, image_name: &str) -> Result<()> {
         }
     }
 
+    // Define the container configuration
     let config = Config {
         image: Some(image_name),
-        cmd: Some(vec!["/bin/sh", "-c", "python3 hello_world.py && while true; do sleep 1000; done"]), // Long-running command
-        tty: Some(true), // Allocate a pseudo-TTY
-        open_stdin: Some(true), // Keep stdin open for interaction
+        cmd: Some(vec!["/bin/sh", "-c", "python3 btc_price.py && while true; do sleep 1000; done"]), // Example command to run Python script
+        tty: Some(true),
+        open_stdin: Some(true),
         host_config: Some(HostConfig {
-            auto_remove: Some(true), // Automatically remove container after exit
+            auto_remove: Some(true),
             publish_all_ports: Some(true),
             ..Default::default()
         }),
-        env: Some(vec!["MY_ENV_VAR=example"]), // Example environment variable
+        env: Some(vec!["MY_ENV_VAR=example"]),
         ..Default::default()
     };
 
@@ -99,11 +84,11 @@ async fn run_container(docker: &Docker, image_name: &str) -> Result<()> {
     match docker.create_container(
         Some(CreateContainerOptions {
             name: container_name,
-            platform: None, // Explicitly set platform to None
+            platform: None, // Platform is set to None (default)
         }),
         config,
     ).await {
-        Ok(_) => println!("Container created successfully."),
+        Ok(_) => println!("Container '{}' created successfully.", container_name),
         Err(e) => {
             println!("Failed to create container: {}", e);
             return Ok(());
@@ -112,7 +97,7 @@ async fn run_container(docker: &Docker, image_name: &str) -> Result<()> {
 
     // Start the container
     match docker.start_container(container_name, None::<StartContainerOptions<String>>).await {
-        Ok(_) => println!("Container started successfully."),
+        Ok(_) => println!("Container '{}' started successfully.", container_name),
         Err(e) => {
             println!("Failed to start container: {}", e);
             return Ok(());
@@ -120,16 +105,16 @@ async fn run_container(docker: &Docker, image_name: &str) -> Result<()> {
     }
 
     // Attach to the container's stdout and stdin for interactive shell
-    let attach_opts = AttachContainerOptions::<String> {
+    let attach_opts = bollard::container::AttachContainerOptions::<String> {
         stdout: Some(true),
         stdin: Some(true),
-        stream: Some(true), // Use stream instead of tty
+        stream: Some(true), // Use stream for interactivity
         logs: Some(false),
-        ..Default::default() // Set other necessary defaults
+        ..Default::default()
     };
 
     match docker.attach_container(container_name, Some(attach_opts)).await {
-        Ok(_) => println!("Attached to container."),
+        Ok(_) => println!("Attached to container '{}'.", container_name),
         Err(e) => {
             println!("Failed to attach to container: {}", e);
             return Ok(());
