@@ -1,7 +1,7 @@
-use bollard::image::BuildImageOptions;
-use bollard::container::{CreateContainerOptions, StartContainerOptions, Config, AttachContainerOptions};
+use bollard::container::{CreateContainerOptions, StartContainerOptions, Config, AttachContainerOptions, StopContainerOptions};
 use bollard::models::HostConfig;
 use bollard::Docker;
+use bollard::image::BuildImageOptions;
 use futures_util::stream::StreamExt;
 use anyhow::Result;
 use tar::Builder;
@@ -65,6 +65,21 @@ async fn main() -> Result<()> {
 // Function to create and start the container
 async fn run_container(docker: &Docker, image_name: &str) -> Result<()> {
     let container_name = "python-container";
+
+    // Check if the container already exists
+    match docker.inspect_container(container_name, None).await {
+        Ok(container_info) => {
+            if container_info.state.unwrap().running.unwrap() {
+                println!("Stopping existing container '{}'...", container_name);
+                let _ = docker.stop_container(container_name, None).await;
+            }
+            println!("Removing existing container '{}'...", container_name);
+            let _ = docker.remove_container(container_name, None).await;
+        }
+        Err(_) => {
+            println!("No existing container found. Proceeding...");
+        }
+    }
 
     let config = Config {
         image: Some(image_name),
