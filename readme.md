@@ -1,4 +1,8 @@
 # Run Docker from Rust code
+```
+sudo apt update
+sudo apt install --only-upgrade docker-ce docker-ce-cli containerd.io
+```
 ---
 ```
 docker rm $(docker ps -a -q)
